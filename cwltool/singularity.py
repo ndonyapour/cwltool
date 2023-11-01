@@ -130,6 +130,7 @@ class SingularityCommandLineJob(ContainerCommandLineJob):
     @staticmethod
     def get_image(
         dockerRequirement: Dict[str, str],
+        tmp_outdir_prefix: str,
         pull_image: bool,
         force_pull: bool = False,
     ) -> bool:
@@ -235,12 +236,26 @@ class SingularityCommandLineJob(ContainerCommandLineJob):
                     found = True
 
             elif "dockerFile" in dockerRequirement:
-                raise SourceLine(
-                    dockerRequirement, "dockerFile", WorkflowException, debug
-                ).makeError(
-                    "dockerFile is not currently supported when using the "
-                    "Singularity runtime for Docker containers."
-                )
+                dockerfile_dir = create_tmp_dir(tmp_outdir_prefix)
+                with open(os.path.join(dockerfile_dir, "Dockerfile"), "w") as dfile:
+                    dfile.write(dockerRequirement["dockerFile"])
+                cmd = [
+                    "spython",
+                    "recipe",
+                    os.path.join(dockerfile_dir, "Dockerfile"),
+                    os.path.join(dockerfile_dir, "Singularity.def"),
+                ]
+                _logger.info(str(cmd))
+                check_call(cmd, stdout=sys.stderr)  # nosec
+                cmd = [
+                    "singularity",
+                    "build",
+                    os.path.join(cache_folder, str(dockerRequirement["dockerImageId"])),
+                    os.path.join(dockerfile_dir, "Singularity.def"),
+                ]
+                _logger.info(str(cmd))
+                check_call(cmd, stdout=sys.stderr)
+                found = True
             elif "dockerLoad" in dockerRequirement:
                 if is_version_3_1_or_newer():
                     if "dockerImageId" in dockerRequirement:
@@ -289,7 +304,7 @@ class SingularityCommandLineJob(ContainerCommandLineJob):
         if not bool(shutil.which("singularity")):
             raise WorkflowException("singularity executable is not available")
 
-        if not self.get_image(cast(Dict[str, str], r), pull_image, force_pull):
+        if not self.get_image(cast(Dict[str, str], r), tmp_outdir_prefix, pull_image, force_pull):
             raise WorkflowException("Container image {} not found".format(r["dockerImageId"]))
 
         return os.path.abspath(cast(str, r["dockerImageId"]))
